@@ -1,0 +1,125 @@
+//SCRIPT TO ACQUIRE TIMELAPSE MULTI-Z SRRF IMAGES
+//Works on Micromanager nightly builds after November 20th, 2018
+
+//Import Required libraries
+import org.micromanager.api.AcquisitionOptions;
+import ij.IJ;
+import ij.gui.*;
+import java.awt.*;
+import java.lang.System;
+
+// CHANGE ONLY CODE BELOW THIS LINE
+///////////////////////////////////////////////////////////////
+
+// Set the acquisition name
+acqName = gui.getUniqueAcquisitionName("GFPmoe_Developing_Heart");
+
+// Select the root directory to save to
+rootDirName = "D:/fernandezgonzalez/Alex/20190708";
+
+// Number of timepoints
+nrFrames = 50;
+// Number of slices
+nrSlices = 20;
+// Step Size between slices (in um)
+stepSize = 0.3;
+// Time between time points (in ms)
+intervalMs =10000;
+// Images per SRRF burst (taken for each slice)
+imagesPerSlice = 100;
+// Set exposure (in ms)
+exposure = 20;
+
+// DO NOT CHANGE CODE BELOW THIS LINE
+///////////////////////////////////////////////////////////////
+
+
+// Create a new folder in the specified directory
+// Will automatically increment folder name
+
+counter = 0;
+filepath = rootDirName  +  "/" + acqName + counter;
+
+File dir = new File(filepath);
+while(dir.exists()) {
+	counter = counter + 1;
+	filepath = rootDirName  + "/" + acqName + counter;
+	dir = new File(filepath);
+}
+new File(rootDirName + "/" + acqName + counter).mkdirs();
+rootDirName = rootDirName + "/" + acqName + counter + "/";
+
+
+//Clear all acquisitions
+gui.closeAllAcquisitions();
+gui.clearMessageWindow();
+
+//Set exposure
+mmc.setExposure(exposure);
+
+//Get initial Z position
+topPos = mmc.getPosition();
+
+//Loop for required number of timepoints
+for(currentFrame=0; currentFrame < nrFrames; currentFrame++){
+	//Track time at which we started the frame
+	timeStartCurrentFrame = System.currentTimeMillis();
+
+	//Start an acquisition for each frame
+	gui.closeAllAcquisitions();
+	gui.openAcquisition("frame" + currentFrame, rootDirName, nrSlices, 1, imagesPerSlice, 1, /* show */ true, /* save */ true);
+		
+	//Clear the circular buffer
+	mmc.clearCircularBuffer();
+
+	//Go through each slice of a Z-Stack
+	for(currentSlice=0; currentSlice < nrSlices; currentSlice++) {
+		
+		//Start sequence acquisition with the total number of images you need to take for slice
+		mmc.startSequenceAcquisition(imagesPerSlice, 0, true);
+		//Initialize a variable to keep track of how many more images we need to take for this slice
+		remaining = imagesPerSlice;
+
+		//Pops an image until we have none left at this spot		
+		while (remaining > 0 || mmc.deviceBusy(mmc.getCameraDevice())) {
+
+			//Add images to the acquisition, and update how many are left
+			if (mmc.getRemainingImageCount() > 0) {
+				img = mmc.popNextTaggedImage();
+				gui.addImageToAcquisition("frame" + currentFrame, currentSlice, 0, (imagesPerSlice)-remaining, 0, img);
+				remaining--;
+		   }
+		   //Otherwise, we wait for an image to be ready
+		   else {
+		     mmc.sleep(Math.min(0.5*exposure, 20));
+		   }
+		}  
+
+		//Once the slice has been acquired, stop the acquisition so we can save, and clear the circular buffer
+		mmc.stopSequenceAcquisition();
+		mmc.clearCircularBuffer();
+		
+		//Once we've acquired enough burst images at that slice, move Z position by another step 
+		mmc.setPosition(mmc.getFocusDevice(), topPos - (currentSlice+1)*stepSize);
+
+	}
+
+
+	//Print the time it took to acquire all the images
+   acqTime = System.currentTimeMillis() - timeStartCurrentFrame;
+	acqTimeString = acqTime.toString();
+
+	//Close the acquisition
+ 	gui.closeAcquisitionWindow("frame" + currentFrame);
+	
+	//Now that we've acquired the entire stack, we check how much time is left before the next frame and move the stage back to the top
+	mmc.setPosition(mmc.getFocusDevice(), topPos);
+   totalTime = System.currentTimeMillis() - timeStartCurrentFrame;
+	gui.message("Acquire Time: " + acqTimeString);
+
+	//If there is time left, we wait the rest before starting next frame
+   if ((intervalMs - totalTime) > 0) {
+		gui.sleep(intervalMs - totalTime);
+   }
+
+}
